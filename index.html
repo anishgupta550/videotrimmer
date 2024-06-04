@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Trimmer</title>
+    <style>
+        #video-container {
+            margin-bottom: 20px;
+        }
+
+        #trimmer-container {
+            display: none;
+            align-items: center;
+        }
+
+        #trimmer {
+            width: 400px;
+            height: 50px;
+            background-color: #f0f0f0;
+            position: relative;
+            margin-right: 20px;
+        }
+
+        .handle {
+            width: 5px;
+            height: 50px;
+            background-color: #007bff;
+            position: absolute;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .handle span {
+            color: white;
+            font-size: 10px;
+            position: absolute;
+            top: -20px;
+            background: #007bff;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+
+        #start-handle {
+            left: 0;
+        }
+
+        #end-handle {
+            right: 0;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="video-container">
+        <input type="file" accept="video/mp4,video/webm" onchange="loadVideo(event)">
+        <video id="video" width="400" controls style="display: none;"></video>
+    </div>
+
+    <div id="trimmer-container">
+        <div id="trimmer">
+            <div id="start-handle" class="handle"><span id="start-time">0:00</span></div>
+            <div id="end-handle" class="handle"><span id="end-time">0:00</span></div>
+        </div>
+        <button onclick="trimVideo()">Trim Video</button>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const trimmer = document.getElementById('trimmer');
+        const startHandle = document.getElementById('start-handle');
+        const endHandle = document.getElementById('end-handle');
+        const startTimeLabel = document.getElementById('start-time');
+        const endTimeLabel = document.getElementById('end-time');
+        var trimmer_container = document.getElementById('trimmer-container');
+
+        let startFrame = 0;
+        let endFrame = 100;
+
+        startHandle.addEventListener('mousedown', startDrag);
+        endHandle.addEventListener('mousedown', startDrag);
+
+        function startDrag(e) {
+            const handle = e.target.closest('.handle');
+            const startX = e.clientX;
+            const initialPosition = parseFloat(handle.style.left) || 0;
+
+            document.onmousemove = function (e) {
+                const deltaX = e.clientX - startX;
+                let newPosition = initialPosition + deltaX;
+
+                if (newPosition < 0) {
+                    newPosition = 0;
+                } else if (newPosition > trimmer.offsetWidth - handle.offsetWidth) {
+                    newPosition = trimmer.offsetWidth - handle.offsetWidth;
+                }
+
+                handle.style.left = newPosition + 'px';
+
+                if (handle.id === 'start-handle') {
+                    startFrame = newPosition / trimmer.offsetWidth * 100;
+                    startTimeLabel.textContent = formatTime(startFrame / 100 * video.duration);
+                } else if (handle.id === 'end-handle') {
+                    endFrame = newPosition / trimmer.offsetWidth * 100;
+                    endTimeLabel.textContent = formatTime(endFrame / 100 * video.duration);
+                }
+            };
+
+            document.onmouseup = function () {
+                document.onmousemove = document.onmouseup = null;
+            };
+        }
+
+        function loadVideo(event) {
+            const file = event.target.files[0];
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                video.src = e.target.result;
+                video.style.display = 'block';
+                video.play();
+                if (e.target.result == "") {
+                    trimmer_container.style.display = "done";
+                } else {
+                    trimmer_container.style.display = "flex";
+                }
+                video.onloadedmetadata = function () {
+                    startTimeLabel.textContent = formatTime(0);
+                    endTimeLabel.textContent = formatTime(video.duration);
+                }
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function trimVideo() {
+            const duration = endFrame - startFrame;
+            // if (duration <= 15) {
+                const startTime = (startFrame / 100) * video.duration;
+                const endTime = (endFrame / 100) * video.duration;
+                trimBlob(startTime, endTime, downloadBlob);
+            // } else {
+                // alert('Trim duration cannot exceed 15 seconds.');
+            // }
+        }
+
+        function trimBlob(startTime, endTime, callback) {
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            const videoWidth = video.videoWidth;
+            const videoHeight = video.videoHeight;
+            canvas.width = videoWidth;
+            canvas.height = videoHeight;
+
+            const chunks = [];
+            const stream = canvas.captureStream(video.currentTime);
+            const rec = new MediaRecorder(stream);
+
+            video.currentTime = startTime;
+
+            video.onseeked = function () {
+                const audioContext = new AudioContext();
+                const audioSource = audioContext.createMediaElementSource(video);
+                const audioDestination = audioContext.createMediaStreamDestination();
+
+                audioSource.connect(audioDestination);
+                const audioTrack = audioDestination.stream.getAudioTracks()[0];
+
+                stream.addTrack(audioTrack);
+
+                rec.start();
+
+                const drawFrame = () => {
+                    if (video.currentTime >= endTime) {
+                        rec.stop();
+                        video.onseeked = null;
+                        audioSource.disconnect();
+                        audioDestination.disconnect();
+                    } else {
+                        context.drawImage(video, 0, 0, videoWidth, videoHeight);
+                        requestAnimationFrame(drawFrame);
+                    }
+                };
+
+                drawFrame();
+            };
+
+            rec.ondataavailable = e => chunks.push(e.data);
+            rec.onstop = () => {
+                const blob = new Blob(chunks, { type: 'video/mp4' });
+                callback(blob);
+            };
+        }
+
+        function downloadBlob(blob) {
+            const a = document.createElement('a');
+            const fileName = getDateTime() + '.mp4';
+            a.href = URL.createObjectURL(blob);
+            a.download = fileName;
+            a.click();
+        }
+
+        function getDateTime() {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+            return `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
+        }
+
+        function formatTime(seconds) {
+            const minutes = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
+        }
+    </script>
+
+</body>
+
+</html>
